@@ -1,0 +1,92 @@
+#!/usr/bin/env zabbysh
+#
+require 'slop'
+require 'highline/import'
+
+puts "This script will propagate a Zabbix IT service time periods to its children."
+
+# Définition des paramètres du script
+$opts = Slop.new strict: true, help: true do
+  banner 'Usage: [options]'
+
+  on :service=,     'The parent IT service (ex: "Web server *")', as: String, required: true
+  on :recursive,    'Recursive search of IT services'
+  on :yes,          'Batch mode'
+end
+
+# Interprétation des paramètres
+begin
+  $opts.parse
+rescue Slop::Error => e
+  puts e.message
+  puts $opts # print help
+  exit
+end
+
+def iterate_services (serviceid)
+  a = []
+  s = Service.get(
+    'selectDependencies' => 'extend',
+    'serviceids' => serviceid
+  )
+  if !s.empty? then
+    s[0]["dependencies"].each do |x|
+      a = a + iterate_services( x['serviceid'] )
+    end
+  end
+  a << serviceid
+  return a
+end    
+
+# Search for the parent IT service
+s = Service.get(
+  'selectDependencies' => 'extend',
+  'selectTimes' => 'extend',
+  'searchWildcardsEnabled' => 1,
+  'startSearch' => 1,
+  'search' => {
+    'name'=> $opts[:service]
+  }
+)
+if s.empty? then
+  puts "No IT service named like \"%s\" in Zabbix" % $opts[:service]
+  exit 1
+end
+
+# iterate through dependencies
+if $opts.present?(:recursive) then
+  myservices = iterate_services(s[0]['serviceid'])
+  myservices.delete(s[0]['serviceid']) # remove parent element
+else
+  myservices = s[0]["dependencies"].map { |n| n["serviceid"] }
+end
+if myservices.empty? then
+  puts "No child for IT service \"%s\" in Zabbix" % s[0]['name']
+  exit 1
+end
+
+times = s[0]["times"]
+if times.empty? then
+  puts "No time period defined for IT service \"%s\" in Zabbix" % s[0]['name']
+  exit 1
+end
+
+# Displays the matching children and ask for confirmation
+puts "Found %d child IT services." % myservices.length
+puts
+if !$opts.present?(:yes) then
+  exit unless HighLine.agree('This will update the corresponding IT services under "%s" with the new time period. Do you want to proceed ? (y/n)' % s[0]['name'] )
+end
+Service.deletetimes(myservices)
+
+myservices.each do |x|
+  times.each do |y|
+    puts "Adding time period with type %s, from %s, to %s" % [ y["type"], y["ts_from"], y["ts_to"] ]
+    Service.addtimes(
+      "serviceid" => x,
+      "type" => y["type"],
+      "ts_from" => y["ts_from"],
+      "ts_to" => y["ts_to"]
+    )
+  end
+end

@@ -1,0 +1,74 @@
+#!/usr/bin/env zabbysh
+#
+require 'slop'
+require 'highline/import'
+
+puts "This script will copy a Zabbix IT service time periods to another IT service."
+
+# Définition des paramètres du script
+$opts = Slop.new strict: true, help: true do
+  banner 'Usage: [options]'
+
+  on :source=,      'The source IT service (ex: "Web server *")', as: String, required: true
+  on :destination=, 'The destination IT service (ex: "Web server *")', as: String, required: true
+  on :yes,          'Batch mode'
+end
+
+# Interprétation des paramètres
+begin
+  $opts.parse
+rescue Slop::Error => e
+  puts e.message
+  puts $opts # print help
+  exit
+end
+
+# Search for the source IT service
+s = Service.get(
+  'selectTimes' => 'extend',
+  'searchWildcardsEnabled' => 1,
+  'startSearch' => 1,
+  'search' => {
+    'name'=> $opts[:source]
+  }
+)
+if s.empty? then
+  puts "No IT service named \"%s\" in Zabbix" % $opts[:source]
+  exit 1
+end
+
+# Search for the destination IT service
+d = Service.get(
+  'selectTimes' => 'extend',
+  'searchWildcardsEnabled' => 1,
+  'startSearch' => 1,
+  'search' => {
+    'name'=> $opts[:destination]
+  }
+)
+if d.empty? then
+  puts "No IT service named \"%s\" in Zabbix" % $opts[:destination]
+  exit 1
+end
+
+# Look for time periods
+times = s[0]["times"]
+if times.empty? then
+  puts "No time period defined for IT service \"%s\" in Zabbix" % $opts[:source]
+  exit 1
+end
+
+if !$opts.present?(:yes) then
+  exit unless HighLine.agree('This will update the corresponding IT services under "%s" with the time periods of service "%s". Do you want to proceed ? (y/n)' % [ d[0]["name"], s[0]["name"] ] )
+end
+Service.deletetimes([d[0]['serviceid']])
+
+times.each do |y|
+  puts "Adding time period with type %s, from %s, to %s" % [ y["type"], y["ts_from"], y["ts_to"] ]
+  Service.addtimes(
+    "serviceid" => d[0]['serviceid'],
+    "type" => y["type"],
+    "ts_from" => y["ts_from"],
+    "ts_to" => y["ts_to"]
+  )
+end

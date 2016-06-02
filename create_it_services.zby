@@ -1,0 +1,93 @@
+#!/usr/bin/env zabbysh
+#
+require 'slop'
+require 'highline/import'
+
+puts "This script will create zabbix IT services based on a host triggers."
+
+# Définition des paramètres du script
+$opts = Slop.new strict: true, help: true do
+  banner 'Usage: [options]'
+
+  on :host=,        'The host with the triggers', as: String, required: true
+  on :service=,     'The parent IT service (ex: "Web server *")', as: String, required: true
+  on :trigger=,     'The trigger filter (ex: "Service * status in down")', as: String, required: true
+  on :update,       'Update if service already exists'
+  on :yes,          'Batch mode'
+end
+
+# Interprétation des paramètres
+begin
+  $opts.parse
+rescue Slop::Error => e
+  puts e.message
+  puts $opts # print help
+  exit
+end
+
+# Search for the parent IT service
+s = Service.get(
+  "search" => {
+    "name"=> $opts[:service]
+  },
+  'searchWildcardsEnabled' => 1,
+  'startSearch' => 1,  
+  "searchWildcardsEnabled" => 1
+)
+if s.empty? then
+  puts "No service named like %s in Zabbix" % $opts[:service]
+  exit 1
+end
+myservice = s[0]["serviceid"]
+
+# Search for matching triggers
+tr = Trigger.get(
+  "host"=> $opts[:host],
+  'searchWildcardsEnabled' => 1,
+  'startSearch' => 1,  
+  "search" => {
+    "description"=> $opts[:trigger]
+  }
+)
+if tr.empty? then
+  puts "No trigger matching the filter \"%s\" on host %s." % [ $opts[:trigger], $opts[:host] ]
+  exit 1
+end
+mylist = tr.map { |n| $opts[:host] + ": " + n["description"] }
+
+# Displays the matching triggers and ask for confirmation
+puts "Found %d triggers matching the filter :" % mylist.length
+puts mylist
+puts
+if !$opts.present?(:yes) then
+  exit unless HighLine.agree('This will create the corresponding IT services under %s. Do you want to proceed ? (y/n)' % s[0]["name"] )
+end
+
+# Creates the new IT services
+tr.each do |x|
+  name = $opts[:host] + ": " + x["description"]
+  service = Service.get( "search" => { "name"=> name })
+  if service.empty? then
+    puts "Service %s does not exist. Creating it." % name
+    Service.create(
+      "name"=> name,
+      "algorithm"=> 1,
+      "showsla"=> 0,
+      "sortorder"=> 1,
+      "triggerid" => x["triggerid"],
+      "parentid"=> myservice
+    )
+  elsif $opts.present?(:update) then
+    puts "Service %s already exists. Updating it." % name
+    Service.update(
+      "serviceid" => service[0]["serviceid"],
+      "algorithm"=> 1,
+      "showsla"=> 0,
+      "sortorder"=> 1,
+      "triggerid" => x["triggerid"],
+      "parentid"=> myservice
+    )
+  else
+    puts "Service %s already exists. Skipping." % x 
+  end
+end

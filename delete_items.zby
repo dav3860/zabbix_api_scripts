@@ -1,0 +1,48 @@
+#!/usr/bin/env zabbysh
+#
+require 'slop'
+require 'highline/import'
+
+puts "This script will delete zabbix items based on a search filter."
+
+# Definition des parametres du script
+$opts = Slop.new strict: true, help: true do
+  banner 'Usage: [options]'
+
+  on :host=,        'The host with the items', as: String, required: true
+  on :filter=,      'The item search filter (ex: "Service * status")', as: String, required: true
+  on :yes,          'Batch mode'
+end
+
+# Interpretation des parametres
+begin
+  $opts.parse
+  rescue Slop::Error => e
+  puts e.message
+  puts $opts # print help
+  exit
+end
+
+# Search for items matching the filter
+i = Item.get(
+  "host" => $opts[:host],
+  "search" => {
+    "name"=> $opts[:filter]
+  },
+  'searchWildcardsEnabled' => 1,
+  'startSearch' => 1,  
+  "searchWildcardsEnabled" => 1
+)
+if i.empty? then
+  puts "No item named like %s in Zabbix on host %s" % [ $opts[:filter], $opts[:host] ]
+  exit 1
+end
+
+# Displays the matching items and ask for confirmation
+puts "Found %d items matching the filter :" % i.length
+puts i.map{ |n| n["name"] }
+puts
+if !$opts.present?(:yes) then
+  exit unless HighLine.agree('This will delete the corresponding items on host %s. Do you want to proceed ? (y/n)' % $opts[:host] )
+end
+Item.delete( i.map{ |n| n["itemid"] } )
