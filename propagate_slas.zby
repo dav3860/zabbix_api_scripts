@@ -1,11 +1,13 @@
 #!/usr/bin/env zabbysh
+# encoding: utf-8
+# -*- encoding : utf-8 -*-
 #
 require 'slop'
 require 'highline/import'
 
 puts "This script will propagate a Zabbix IT service SLAs to its children."
 
-# Définition des paramètres du script
+# Script parameters
 $opts = Slop.new strict: true, help: true do
   banner 'Usage: [options]'
 
@@ -14,7 +16,7 @@ $opts = Slop.new strict: true, help: true do
   on :yes,          'Batch mode'
 end
 
-# Interprétation des paramètres
+# Parse the parameters
 begin
   $opts.parse
 rescue Slop::Error => e

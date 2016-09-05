@@ -1,28 +1,38 @@
 #!/usr/bin/env zabbysh
+# encoding: utf-8
+# -*- encoding : utf-8 -*-
 #
 require 'slop'
 require 'highline/import'
 
 puts "This script will create zabbix IT services based on a host triggers."
 
-# Définition des paramètres du script
+# Script parameters
 $opts = Slop.new strict: true, help: true do
   banner 'Usage: [options]'
 
   on :host=,        'The host with the triggers', as: String, required: true
   on :service=,     'The parent IT service (ex: "Web server *")', as: String, required: true
+  on :softservice=, 'The parent IT service for the soft link (ex: "Web server *")', as: String
   on :trigger=,     'The trigger filter (ex: "Service * status in down")', as: String, required: true
   on :update,       'Update if service already exists'
+  on :application=, 'An application to filter on', as: String
+  on :soft,         'Soft link', as: String
   on :yes,          'Batch mode'
 end
 
-# Interprétation des paramètres
+# Parse the parameters
 begin
   $opts.parse
 rescue Slop::Error => e
   puts e.message
   puts $opts # print help
   exit
+end
+
+if $opts.present?(:soft) and !$opts.present?(:softservice) then
+  puts "A parent service for the soft links must be selected"
+  exit 1
 end
 
 # Search for the parent IT service
@@ -40,13 +50,36 @@ if s.empty? then
 end
 myservice = s[0]["serviceid"]
 
+# Search for the parent IT service or the soft links 
+if $opts.present?(:softservice) then
+  s = Service.get(
+    "search" => {
+      "name"=> $opts[:softservice]
+    },
+    'searchWildcardsEnabled' => 1,
+    'startSearch' => 1,  
+    "searchWildcardsEnabled" => 1
+  )
+  if s.empty? then
+    puts "No service named like %s in Zabbix" % $opts[:softservice]
+    exit 1
+  end
+  mysoftservice = s[0]["serviceid"]
+end
+
+if $opts.present?(:application) then
+  applications = Application.get("search"=>{"name"=>$opts[:application]})
+  appids = applications.map{|x| x['applicationid']}
+end
+
 # Search for matching triggers
 tr = Trigger.get(
   "host"=> $opts[:host],
   'searchWildcardsEnabled' => 1,
-  'startSearch' => 1,  
-  "search" => {
-    "description"=> $opts[:trigger]
+  'startSearch' => 1,
+  'applicationids' => appids,
+  'search' => {
+    'description'=> $opts[:trigger]
   }
 )
 if tr.empty? then
@@ -72,7 +105,7 @@ tr.each do |x|
     Service.create(
       "name"=> name,
       "algorithm"=> 1,
-      "showsla"=> 0,
+      "showsla"=> 1,
       "sortorder"=> 1,
       "triggerid" => x["triggerid"],
       "parentid"=> myservice
@@ -82,12 +115,23 @@ tr.each do |x|
     Service.update(
       "serviceid" => service[0]["serviceid"],
       "algorithm"=> 1,
-      "showsla"=> 0,
+      "showsla"=> 1,
       "sortorder"=> 1,
       "triggerid" => x["triggerid"],
       "parentid"=> myservice
     )
   else
     puts "Service %s already exists. Skipping." % x 
+  end
+  
+  # Handle soft links
+  if $opts.present?(:soft) then
+    service = Service.get( "search" => { "name"=> name })
+    puts "Creating soft link between services %s and %s." % [name, $opts[:softservice]]
+    Service.adddependencies(
+      "serviceid" => mysoftservice,
+      "dependsOnServiceid" => service[0]["serviceid"],
+      "soft" => 1
+    )
   end
 end
